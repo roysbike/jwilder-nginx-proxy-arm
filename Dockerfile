@@ -1,39 +1,40 @@
-FROM arm32v6/alpine as builder
+FROM arm32v7/nginx 
 
-RUN apk add --update \
-        openssl \
-        git \
-    && rm /var/cache/apk/*
+# Install wget and install/updates certificates
+RUN apt-get update \
+ && apt-get install -y -q --no-install-recommends \
+    ca-certificates \
+    wget \
+    git \
+ && apt-get clean \
+ && rm -r /var/lib/apt/lists/*
 
 
-ENV LETS_ENCRYPT_VERSION "v1.12.1"
-RUN git clone --branch ${LETS_ENCRYPT_VERSION} https://github.com/JrCs/docker-letsencrypt-nginx-proxy-companion.git /docker-letsencrypt-nginx-proxy-companion
+# Configure Nginx and apply fix for very long server names
+RUN echo "daemon off;" >> /etc/nginx/nginx.conf \
+ && sed -i 's/^http {/&\n    server_names_hash_bucket_size 128;/g' /etc/nginx/nginx.conf
 
-FROM arm32v6/alpine
-ENV DEBUG=false \
-    DOCKER_GEN_VERSION=0.7.4 \
-    DOCKER_HOST=unix:///var/run/docker.sock
 
-# Install packages required by the image
-RUN apk add --update \
-        bash \
-        ca-certificates \
-        curl \
-        jq \
-        openssl \
-    && rm /var/cache/apk/*
+# Install Forego
+RUN wget --quiet https://bin.equinox.io/c/ekMN3bCZFUn/forego-stable-linux-arm.tgz && \
+	tar xvf forego-stable-linux-arm.tgz -C /usr/local/bin && \
+	chmod u+x /usr/local/bin/forego
 
-# Install docker-gen
-RUN curl -L https://github.com/jwilder/docker-gen/releases/download/${DOCKER_GEN_VERSION}/docker-gen-alpine-linux-armhf-${DOCKER_GEN_VERSION}.tar.gz \
-    | tar -C /usr/local/bin -xz
+ENV DOCKER_GEN_VERSION 0.7.4
 
-# Install simp_le
-COPY --from=builder /docker-letsencrypt-nginx-proxy-companion/install_simp_le.sh /app/install_simp_le.sh
-RUN chmod +rx /app/install_simp_le.sh && sync && /app/install_simp_le.sh && rm -f /app/install_simp_le.sh
+RUN wget --quiet https://github.com/jwilder/docker-gen/releases/download/$DOCKER_GEN_VERSION/docker-gen-alpine-linux-armhf-$DOCKER_GEN_VERSION.tar.gz \
+ && tar -C /usr/local/bin -xvzf docker-gen-alpine-linux-armhf-$DOCKER_GEN_VERSION.tar.gz \
+ && rm /docker-gen-alpine-linux-armhf-$DOCKER_GEN_VERSION.tar.gz
 
-COPY --from=builder /docker-letsencrypt-nginx-proxy-companion/app/ /app/
 
-WORKDIR /app
+ENV NGINX_PROXY_VERSION "0.6.0"
+RUN git clone --branch ${NGINX_PROXY_VERSION} https://github.com/jwilder/nginx-proxy.git /app
 
-ENTRYPOINT [ "/bin/bash", "/app/entrypoint.sh" ]
-CMD [ "/bin/bash", "/app/start.sh" ]
+WORKDIR /app/
+
+ENV DOCKER_HOST unix:///tmp/docker.sock
+
+VOLUME ["/etc/nginx/certs", "/etc/nginx/dhparam"]
+
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
+CMD ["forego", "start", "-r"]
